@@ -3,7 +3,7 @@ from discord.ext import commands, tasks
 from discord import app_commands
 import aiosqlite
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 TOKEN = os.getenv("TOKEN")
 
@@ -18,7 +18,7 @@ async def init_db():
         await db.execute("""
             CREATE TABLE IF NOT EXISTS gofast (
                 user_id INTEGER PRIMARY KEY,
-                start_time TEXT
+                end_time TEXT
             )
         """)
         await db.commit()
@@ -27,7 +27,7 @@ async def init_db():
 @bot.tree.command(name="gofast", description="Lancer un gofast (24h)")
 async def gofast(interaction: discord.Interaction):
     user_id = interaction.user.id
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
 
     async with aiosqlite.connect(DB_NAME) as db:
         cursor = await db.execute("SELECT * FROM gofast WHERE user_id = ?", (user_id,))
@@ -37,9 +37,11 @@ async def gofast(interaction: discord.Interaction):
             await interaction.response.send_message("❌ Tu as déjà un gofast en cours.", ephemeral=True)
             return
 
+        end_time = now + timedelta(hours=24)
+
         await db.execute(
-            "INSERT INTO gofast (user_id, start_time) VALUES (?, ?)",
-            (user_id, now.isoformat())
+            "INSERT INTO gofast (user_id, end_time) VALUES (?, ?)",
+            (user_id, end_time.isoformat())
         )
         await db.commit()
 
@@ -54,22 +56,25 @@ async def temps(interaction: discord.Interaction):
     user_id = interaction.user.id
 
     async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute("SELECT start_time FROM gofast WHERE user_id = ?", (user_id,))
+        cursor = await db.execute("SELECT end_time FROM gofast WHERE user_id = ?", (user_id,))
         row = await cursor.fetchone()
 
         if not row:
             await interaction.response.send_message("❌ Aucun gofast en cours.", ephemeral=True)
             return
 
-        start_time = datetime.fromisoformat(row[0])
-        end_time = start_time + timedelta(hours=24)
-        remaining = end_time - datetime.now()
+        end_time = datetime.fromisoformat(row[0])
+        now = datetime.now(timezone.utc)
+
+        remaining = end_time - now
 
         if remaining.total_seconds() <= 0:
             await interaction.response.send_message("✅ Ton gofast est prêt !", ephemeral=True)
         else:
-            hours, remainder = divmod(int(remaining.total_seconds()), 3600)
+            total_seconds = int(remaining.total_seconds())
+            hours, remainder = divmod(total_seconds, 3600)
             minutes, _ = divmod(remainder, 60)
+
             await interaction.response.send_message(
                 f"⏳ Temps restant : {hours}h {minutes}min",
                 ephemeral=True
@@ -78,24 +83,21 @@ async def temps(interaction: discord.Interaction):
 # 🔹 Vérification automatique
 @tasks.loop(minutes=1)
 async def check_gofast():
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
 
     async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute("SELECT user_id, start_time FROM gofast")
+        cursor = await db.execute("SELECT user_id, end_time FROM gofast")
         rows = await cursor.fetchall()
 
-        for user_id, start_time_str in rows:
-            start_time = datetime.fromisoformat(start_time_str)
-            end_time = start_time + timedelta(hours=24)
+        for user_id, end_time_str in rows:
+            end_time = datetime.fromisoformat(end_time_str)
 
             if now >= end_time:
                 user = await bot.fetch_user(user_id)
 
-                # 🔹 DM
                 try:
                     await user.send("🚗 Ton gofast est prêt !")
                 except:
-                    # 🔹 fallback mention dans serveur
                     for guild in bot.guilds:
                         member = guild.get_member(user_id)
                         if member:
@@ -105,6 +107,7 @@ async def check_gofast():
                             break
 
                 await db.execute("DELETE FROM gofast WHERE user_id = ?", (user_id,))
+
         await db.commit()
 
 # 🔹 Ready
