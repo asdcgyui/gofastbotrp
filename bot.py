@@ -80,6 +80,24 @@ async def temps(interaction: discord.Interaction):
                 ephemeral=True
             )
 
+# 🔹 Supprimer le gofast (reset cooldown)
+@bot.tree.command(name="stopgofast", description="Supprimer ton gofast en cours")
+async def stopgofast(interaction: discord.Interaction):
+    user_id = interaction.user.id
+
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute("SELECT * FROM gofast WHERE user_id = ?", (user_id,))
+        existing = await cursor.fetchone()
+
+        if not existing:
+            await interaction.response.send_message("❌ Tu n'as aucun gofast en cours.", ephemeral=True)
+            return
+
+        await db.execute("DELETE FROM gofast WHERE user_id = ?", (user_id,))
+        await db.commit()
+
+    await interaction.response.send_message("🗑️ Ton gofast a été supprimé !", ephemeral=True)
+
 # 🔹 Vérification automatique
 @tasks.loop(minutes=1)
 async def check_gofast():
