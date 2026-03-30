@@ -26,6 +26,9 @@ async def init_db():
 # 🔹 Lancer un gofast
 @bot.tree.command(name="gofast", description="Lancer un gofast (24h)")
 async def gofast(interaction: discord.Interaction):
+
+    await interaction.response.defer(ephemeral=False)  # ✅ IMPORTANT
+
     user_id = interaction.user.id
     now = datetime.now(timezone.utc)
 
@@ -34,7 +37,7 @@ async def gofast(interaction: discord.Interaction):
         existing = await cursor.fetchone()
 
         if existing:
-            await interaction.response.send_message("❌ Tu as déjà un gofast en cours.", ephemeral=True)
+            await interaction.followup.send("❌ Tu as déjà un gofast en cours.", ephemeral=True)
             return
 
         end_time = now + timedelta(hours=24)
@@ -45,14 +48,16 @@ async def gofast(interaction: discord.Interaction):
         )
         await db.commit()
 
-    await interaction.response.send_message(
-        f"🚗 Gofast lancé à {now.strftime('%H:%M')} (24h)",
-        ephemeral=False
+    await interaction.followup.send(
+        f"🚗 Gofast lancé à {now.strftime('%H:%M')} (24h)"
     )
 
 # 🔹 Voir temps restant
 @bot.tree.command(name="temps", description="Voir le temps restant de ton gofast")
 async def temps(interaction: discord.Interaction):
+
+    await interaction.response.defer(ephemeral=True)  # ✅ IMPORTANT
+
     user_id = interaction.user.id
 
     async with aiosqlite.connect(DB_NAME) as db:
@@ -60,7 +65,7 @@ async def temps(interaction: discord.Interaction):
         row = await cursor.fetchone()
 
         if not row:
-            await interaction.response.send_message("❌ Aucun gofast en cours.", ephemeral=True)
+            await interaction.followup.send("❌ Aucun gofast en cours.", ephemeral=True)
             return
 
         end_time = datetime.fromisoformat(row[0])
@@ -69,13 +74,13 @@ async def temps(interaction: discord.Interaction):
         remaining = end_time - now
 
         if remaining.total_seconds() <= 0:
-            await interaction.response.send_message("✅ Ton gofast est prêt !", ephemeral=True)
+            await interaction.followup.send("✅ Ton gofast est prêt !", ephemeral=True)
         else:
             total_seconds = int(remaining.total_seconds())
             hours, remainder = divmod(total_seconds, 3600)
             minutes, _ = divmod(remainder, 60)
 
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"⏳ Temps restant : {hours}h {minutes}min",
                 ephemeral=True
             )
