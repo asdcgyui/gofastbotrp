@@ -88,6 +88,9 @@ async def temps(interaction: discord.Interaction):
 # 🔹 Supprimer le gofast (reset cooldown)
 @bot.tree.command(name="stopgofast", description="Supprimer ton gofast en cours")
 async def stopgofast(interaction: discord.Interaction):
+
+    await interaction.response.defer(ephemeral=True)  # ✅ IMPORTANT
+
     user_id = interaction.user.id
 
     async with aiosqlite.connect(DB_NAME) as db:
@@ -95,13 +98,13 @@ async def stopgofast(interaction: discord.Interaction):
         existing = await cursor.fetchone()
 
         if not existing:
-            await interaction.response.send_message("❌ Tu n'as aucun gofast en cours.", ephemeral=True)
+            await interaction.followup.send("❌ Tu n'as aucun gofast en cours.", ephemeral=True)
             return
 
         await db.execute("DELETE FROM gofast WHERE user_id = ?", (user_id,))
         await db.commit()
 
-    await interaction.response.send_message("🗑️ Ton gofast a été supprimé !", ephemeral=True)
+    await interaction.followup.send("🗑️ Ton gofast a été supprimé !")
 
 # 🔹 Vérification automatique
 @tasks.loop(minutes=1)
@@ -116,19 +119,40 @@ async def check_gofast():
             end_time = datetime.fromisoformat(end_time_str)
 
             if now >= end_time:
-                user = await bot.fetch_user(user_id)
-
                 try:
-                    await user.send("🚗 Ton gofast est prêt !")
-                except:
-                    for guild in bot.guilds:
-                        member = guild.get_member(user_id)
-                        if member:
-                            channel = guild.system_channel
-                            if channel:
-                                await channel.send(f"{member.mention} 🚗 Ton gofast est prêt !")
-                            break
+                    user = await bot.fetch_user(user_id)
 
+                    # 🔹 Tentative DM
+                    try:
+                        await user.send("🚗 Ton gofast est prêt !")
+                    except:
+                        # 🔹 fallback serveur
+                        for guild in bot.guilds:
+                            member = guild.get_member(user_id)
+
+                            if member:
+                                # chercher un channel valide
+                                channel = None
+
+                                # priorité au system channel
+                                if guild.system_channel:
+                                    channel = guild.system_channel
+
+                                # fallback: premier salon texte accessible
+                                if not channel:
+                                    for c in guild.text_channels:
+                                        if c.permissions_for(guild.me).send_messages:
+                                            channel = c
+                                            break
+
+                                if channel:
+                                    await channel.send(f"{member.mention} 🚗 Ton gofast est prêt !")
+                                break
+
+                except Exception as e:
+                    print(f"Erreur check_gofast user {user_id} : {e}")
+
+                # 🔹 suppression en base
                 await db.execute("DELETE FROM gofast WHERE user_id = ?", (user_id,))
 
         await db.commit()
