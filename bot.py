@@ -132,7 +132,12 @@ async def check_gofast():
 @bot.event
 async def on_ready():
     await init_db()
-    await bot.tree.sync()
+
+    # ⚠️ Mets l'ID de ton serveur ici
+    GUILD_ID = 871018561383071744
+    guild = discord.Object(id=GUILD_ID)
+    await bot.tree.sync(guild=guild)
+
     check_gofast.start()
     print(f"✅ Connecté en tant que {bot.user}")
 
