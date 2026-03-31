@@ -17,6 +17,7 @@ DB_NAME = "gofast.db"
 # ─────────────────────────────────────────
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:
+        # Créer la table si elle n'existe pas
         await db.execute("""
             CREATE TABLE IF NOT EXISTS gofast (
                 user_id INTEGER PRIMARY KEY,
@@ -24,6 +25,16 @@ async def init_db():
             )
         """)
         await db.commit()
+
+        # Migration : ajouter end_time si la colonne est absente (ancienne DB)
+        cursor = await db.execute("PRAGMA table_info(gofast)")
+        columns = [row[1] for row in await cursor.fetchall()]
+        if "end_time" not in columns:
+            print("[init_db] Migration : ajout de la colonne end_time")
+            await db.execute("ALTER TABLE gofast ADD COLUMN end_time TEXT")
+            await db.commit()
+        
+        print("[init_db] Base de données prête.")
 
 # ─────────────────────────────────────────
 # /gofast — Lancer un gofast (24h)
