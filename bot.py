@@ -30,93 +30,117 @@ async def init_db():
 # ─────────────────────────────────────────
 @bot.tree.command(name="gofast", description="Lancer un gofast (24h)")
 async def gofast(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=False)
     user_id = interaction.user.id
     now = datetime.now(timezone.utc)
 
-    async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute("SELECT end_time FROM gofast WHERE user_id = ?", (user_id,))
-        existing = await cursor.fetchone()
+    try:
+        async with aiosqlite.connect(DB_NAME) as db:
+            cursor = await db.execute("SELECT end_time FROM gofast WHERE user_id = ?", (user_id,))
+            existing = await cursor.fetchone()
 
-        if existing:
-            end_time = datetime.fromisoformat(existing[0])
-            remaining = end_time - now
-            if remaining.total_seconds() > 0:
-                total_seconds = int(remaining.total_seconds())
-                hours, remainder = divmod(total_seconds, 3600)
-                minutes, _ = divmod(remainder, 60)
-                await interaction.followup.send(
-                    f"❌ Tu as déjà un gofast en cours. Temps restant : **{hours}h {minutes}min**",
-                    ephemeral=True
-                )
-                return
-            else:
-                # Le gofast est expiré mais pas encore nettoyé, on le remplace
-                await db.execute("DELETE FROM gofast WHERE user_id = ?", (user_id,))
-                await db.commit()
+            if existing:
+                end_time = datetime.fromisoformat(existing[0])
+                remaining = end_time - now
+                if remaining.total_seconds() > 0:
+                    total_seconds = int(remaining.total_seconds())
+                    hours, remainder = divmod(total_seconds, 3600)
+                    minutes, _ = divmod(remainder, 60)
+                    await interaction.response.send_message(
+                        f"❌ Tu as déjà un gofast en cours. Temps restant : **{hours}h {minutes}min**",
+                        ephemeral=True
+                    )
+                    return
+                else:
+                    # Expiré mais pas encore nettoyé, on remplace
+                    await db.execute("DELETE FROM gofast WHERE user_id = ?", (user_id,))
+                    await db.commit()
 
-        end_time = now + timedelta(hours=24)
-        await db.execute(
-            "INSERT INTO gofast (user_id, end_time) VALUES (?, ?)",
-            (user_id, end_time.isoformat())
+            end_time = now + timedelta(hours=24)
+            await db.execute(
+                "INSERT INTO gofast (user_id, end_time) VALUES (?, ?)",
+                (user_id, end_time.isoformat())
+            )
+            await db.commit()
+
+        await interaction.response.send_message(
+            f"🚗 **Gofast lancé !** Il sera prêt dans **24h** (à {end_time.strftime('%H:%M')} UTC)."
         )
-        await db.commit()
 
-    await interaction.followup.send(
-        f"🚗 **Gofast lancé !** Il sera prêt dans **24h** (à {end_time.strftime('%H:%M')} UTC)."
-    )
+    except Exception as e:
+        print(f"[gofast] Erreur : {e}")
+        try:
+            await interaction.response.send_message("❌ Une erreur est survenue. Réessaie.", ephemeral=True)
+        except Exception:
+            pass
 
 # ─────────────────────────────────────────
 # /temps — Voir le temps restant
 # ─────────────────────────────────────────
 @bot.tree.command(name="temps", description="Voir le temps restant de ton gofast")
 async def temps(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
     user_id = interaction.user.id
 
-    async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute("SELECT end_time FROM gofast WHERE user_id = ?", (user_id,))
-        row = await cursor.fetchone()
+    try:
+        async with aiosqlite.connect(DB_NAME) as db:
+            cursor = await db.execute("SELECT end_time FROM gofast WHERE user_id = ?", (user_id,))
+            row = await cursor.fetchone()
 
-    if not row:
-        await interaction.followup.send("❌ Aucun gofast en cours.", ephemeral=True)
-        return
+        if not row:
+            await interaction.response.send_message("❌ Aucun gofast en cours.", ephemeral=True)
+            return
 
-    end_time = datetime.fromisoformat(row[0])
-    now = datetime.now(timezone.utc)
-    remaining = end_time - now
+        end_time = datetime.fromisoformat(row[0])
+        now = datetime.now(timezone.utc)
+        remaining = end_time - now
 
-    if remaining.total_seconds() <= 0:
-        await interaction.followup.send("✅ Ton gofast est **prêt** ! Lance-le avec `/gofast`.", ephemeral=True)
-    else:
-        total_seconds = int(remaining.total_seconds())
-        hours, remainder = divmod(total_seconds, 3600)
-        minutes, _ = divmod(remainder, 60)
-        await interaction.followup.send(
-            f"⏳ Temps restant avant le prochain gofast : **{hours}h {minutes}min**",
-            ephemeral=True
-        )
+        if remaining.total_seconds() <= 0:
+            await interaction.response.send_message("✅ Ton gofast est **prêt** ! Lance-le avec `/gofast`.", ephemeral=True)
+        else:
+            total_seconds = int(remaining.total_seconds())
+            hours, remainder = divmod(total_seconds, 3600)
+            minutes, _ = divmod(remainder, 60)
+            await interaction.response.send_message(
+                f"⏳ Temps restant avant le prochain gofast : **{hours}h {minutes}min**",
+                ephemeral=True
+            )
+
+    except Exception as e:
+        print(f"[temps] Erreur : {e}")
+        try:
+            await interaction.response.send_message("❌ Une erreur est survenue. Réessaie.", ephemeral=True)
+        except Exception:
+            pass
 
 # ─────────────────────────────────────────
 # /stopgofast — Arrêter le gofast en cours
 # ─────────────────────────────────────────
 @bot.tree.command(name="stopgofast", description="Supprimer ton gofast en cours")
 async def stopgofast(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
     user_id = interaction.user.id
 
-    async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute("SELECT user_id FROM gofast WHERE user_id = ?", (user_id,))
-        existing = await cursor.fetchone()
+    try:
+        async with aiosqlite.connect(DB_NAME) as db:
+            cursor = await db.execute("SELECT user_id FROM gofast WHERE user_id = ?", (user_id,))
+            existing = await cursor.fetchone()
 
-        if not existing:
-            await interaction.followup.send("❌ Tu n'as aucun gofast en cours.", ephemeral=True)
-            return
+            if not existing:
+                await interaction.response.send_message("❌ Tu n'as aucun gofast en cours.", ephemeral=True)
+                return
 
-        await db.execute("DELETE FROM gofast WHERE user_id = ?", (user_id,))
-        await db.commit()
+            await db.execute("DELETE FROM gofast WHERE user_id = ?", (user_id,))
+            await db.commit()
 
-    await interaction.followup.send("🗑️ Ton gofast a été **arrêté**. Tu peux en relancer un avec `/gofast`.", ephemeral=True)
+        await interaction.response.send_message(
+            "🗑️ Ton gofast a été **arrêté**. Tu peux en relancer un avec `/gofast`.",
+            ephemeral=True
+        )
+
+    except Exception as e:
+        print(f"[stopgofast] Erreur : {e}")
+        try:
+            await interaction.response.send_message("❌ Une erreur est survenue. Réessaie.", ephemeral=True)
+        except Exception:
+            pass
 
 # ─────────────────────────────────────────
 # Vérification automatique toutes les minutes
