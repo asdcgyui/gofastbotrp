@@ -12,7 +12,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 DB_NAME = "gofast.db"
 
-# 🔹 Initialisation DB
+# ─────────────────────────────────────────
+# Initialisation DB
+# ─────────────────────────────────────────
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("""
@@ -23,25 +25,37 @@ async def init_db():
         """)
         await db.commit()
 
-# 🔹 Lancer un gofast
+# ─────────────────────────────────────────
+# /gofast — Lancer un gofast (24h)
+# ─────────────────────────────────────────
 @bot.tree.command(name="gofast", description="Lancer un gofast (24h)")
 async def gofast(interaction: discord.Interaction):
-
-    await interaction.response.defer(ephemeral=False)  # ✅ IMPORTANT
-
+    await interaction.response.defer(ephemeral=False)
     user_id = interaction.user.id
     now = datetime.now(timezone.utc)
 
     async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute("SELECT * FROM gofast WHERE user_id = ?", (user_id,))
+        cursor = await db.execute("SELECT end_time FROM gofast WHERE user_id = ?", (user_id,))
         existing = await cursor.fetchone()
 
         if existing:
-            await interaction.followup.send("❌ Tu as déjà un gofast en cours.", ephemeral=True)
-            return
+            end_time = datetime.fromisoformat(existing[0])
+            remaining = end_time - now
+            if remaining.total_seconds() > 0:
+                total_seconds = int(remaining.total_seconds())
+                hours, remainder = divmod(total_seconds, 3600)
+                minutes, _ = divmod(remainder, 60)
+                await interaction.followup.send(
+                    f"❌ Tu as déjà un gofast en cours. Temps restant : **{hours}h {minutes}min**",
+                    ephemeral=True
+                )
+                return
+            else:
+                # Le gofast est expiré mais pas encore nettoyé, on le remplace
+                await db.execute("DELETE FROM gofast WHERE user_id = ?", (user_id,))
+                await db.commit()
 
         end_time = now + timedelta(hours=24)
-
         await db.execute(
             "INSERT INTO gofast (user_id, end_time) VALUES (?, ?)",
             (user_id, end_time.isoformat())
@@ -49,52 +63,50 @@ async def gofast(interaction: discord.Interaction):
         await db.commit()
 
     await interaction.followup.send(
-        f"🚗 Gofast lancé à {now.strftime('%H:%M')} (24h)"
+        f"🚗 **Gofast lancé !** Il sera prêt dans **24h** (à {end_time.strftime('%H:%M')} UTC)."
     )
 
-# 🔹 Voir temps restant
+# ─────────────────────────────────────────
+# /temps — Voir le temps restant
+# ─────────────────────────────────────────
 @bot.tree.command(name="temps", description="Voir le temps restant de ton gofast")
 async def temps(interaction: discord.Interaction):
-
-    await interaction.response.defer(ephemeral=True)  # ✅ IMPORTANT
-
+    await interaction.response.defer(ephemeral=True)
     user_id = interaction.user.id
 
     async with aiosqlite.connect(DB_NAME) as db:
         cursor = await db.execute("SELECT end_time FROM gofast WHERE user_id = ?", (user_id,))
         row = await cursor.fetchone()
 
-        if not row:
-            await interaction.followup.send("❌ Aucun gofast en cours.", ephemeral=True)
-            return
+    if not row:
+        await interaction.followup.send("❌ Aucun gofast en cours.", ephemeral=True)
+        return
 
-        end_time = datetime.fromisoformat(row[0])
-        now = datetime.now(timezone.utc)
+    end_time = datetime.fromisoformat(row[0])
+    now = datetime.now(timezone.utc)
+    remaining = end_time - now
 
-        remaining = end_time - now
+    if remaining.total_seconds() <= 0:
+        await interaction.followup.send("✅ Ton gofast est **prêt** ! Lance-le avec `/gofast`.", ephemeral=True)
+    else:
+        total_seconds = int(remaining.total_seconds())
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, _ = divmod(remainder, 60)
+        await interaction.followup.send(
+            f"⏳ Temps restant avant le prochain gofast : **{hours}h {minutes}min**",
+            ephemeral=True
+        )
 
-        if remaining.total_seconds() <= 0:
-            await interaction.followup.send("✅ Ton gofast est prêt !", ephemeral=True)
-        else:
-            total_seconds = int(remaining.total_seconds())
-            hours, remainder = divmod(total_seconds, 3600)
-            minutes, _ = divmod(remainder, 60)
-
-            await interaction.followup.send(
-                f"⏳ Temps restant : {hours}h {minutes}min",
-                ephemeral=True
-            )
-
-# 🔹 Supprimer le gofast (reset cooldown)
+# ─────────────────────────────────────────
+# /stopgofast — Arrêter le gofast en cours
+# ─────────────────────────────────────────
 @bot.tree.command(name="stopgofast", description="Supprimer ton gofast en cours")
 async def stopgofast(interaction: discord.Interaction):
-
-    await interaction.response.defer(ephemeral=True)  # ✅ IMPORTANT
-
+    await interaction.response.defer(ephemeral=True)
     user_id = interaction.user.id
 
     async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute("SELECT * FROM gofast WHERE user_id = ?", (user_id,))
+        cursor = await db.execute("SELECT user_id FROM gofast WHERE user_id = ?", (user_id,))
         existing = await cursor.fetchone()
 
         if not existing:
@@ -104,70 +116,92 @@ async def stopgofast(interaction: discord.Interaction):
         await db.execute("DELETE FROM gofast WHERE user_id = ?", (user_id,))
         await db.commit()
 
-    await interaction.followup.send("🗑️ Ton gofast a été supprimé !")
+    await interaction.followup.send("🗑️ Ton gofast a été **arrêté**. Tu peux en relancer un avec `/gofast`.", ephemeral=True)
 
-# 🔹 Vérification automatique
+# ─────────────────────────────────────────
+# Vérification automatique toutes les minutes
+# ─────────────────────────────────────────
 @tasks.loop(minutes=1)
 async def check_gofast():
     now = datetime.now(timezone.utc)
+    to_delete = []
 
-    async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute("SELECT user_id, end_time FROM gofast")
-        rows = await cursor.fetchall()
+    try:
+        async with aiosqlite.connect(DB_NAME) as db:
+            cursor = await db.execute("SELECT user_id, end_time FROM gofast")
+            rows = await cursor.fetchall()
 
         for user_id, end_time_str in rows:
-            end_time = datetime.fromisoformat(end_time_str)
+            try:
+                end_time = datetime.fromisoformat(end_time_str)
+            except ValueError:
+                to_delete.append(user_id)
+                continue
 
             if now >= end_time:
+                to_delete.append(user_id)
                 try:
                     user = await bot.fetch_user(user_id)
+                    notified = False
 
-                    # 🔹 Tentative DM
+                    # Tentative DM
                     try:
-                        await user.send("🚗 Ton gofast est prêt !")
-                    except:
-                        # 🔹 fallback serveur
+                        await user.send("🚗 Ton gofast est **prêt** ! Tu peux le relancer avec `/gofast`.")
+                        notified = True
+                    except discord.Forbidden:
+                        pass
+
+                    # Fallback : mention dans un salon du serveur
+                    if not notified:
                         for guild in bot.guilds:
                             member = guild.get_member(user_id)
-
-                            if member:
-                                # chercher un channel valide
-                                channel = None
-
-                                # priorité au system channel
-                                if guild.system_channel:
-                                    channel = guild.system_channel
-
-                                # fallback: premier salon texte accessible
-                                if not channel:
-                                    for c in guild.text_channels:
-                                        if c.permissions_for(guild.me).send_messages:
-                                            channel = c
-                                            break
-
-                                if channel:
-                                    await channel.send(f"{member.mention} 🚗 Ton gofast est prêt !")
+                            if not member:
+                                continue
+                            channel = guild.system_channel
+                            if not channel or not channel.permissions_for(guild.me).send_messages:
+                                channel = next(
+                                    (c for c in guild.text_channels if c.permissions_for(guild.me).send_messages),
+                                    None
+                                )
+                            if channel:
+                                await channel.send(f"{member.mention} 🚗 Ton gofast est **prêt** !")
                                 break
 
                 except Exception as e:
-                    print(f"Erreur check_gofast user {user_id} : {e}")
+                    print(f"[check_gofast] Erreur notif user {user_id} : {e}")
 
-                # 🔹 suppression en base
-                await db.execute("DELETE FROM gofast WHERE user_id = ?", (user_id,))
+        # Suppression groupée après l'itération
+        if to_delete:
+            async with aiosqlite.connect(DB_NAME) as db:
+                await db.executemany("DELETE FROM gofast WHERE user_id = ?", [(uid,) for uid in to_delete])
+                await db.commit()
 
-        await db.commit()
+    except Exception as e:
+        print(f"[check_gofast] Erreur globale : {e}")
 
-# 🔹 Ready
+@check_gofast.before_loop
+async def before_check():
+    await bot.wait_until_ready()
+
+# ─────────────────────────────────────────
+# Ready
+# ─────────────────────────────────────────
 @bot.event
 async def on_ready():
     await init_db()
 
-    # ⚠️ Mets l'ID de ton serveur ici
-    GUILD_ID = 871018561383071744
+    GUILD_ID = 871018561383071744  # ⚠️ Ton ID de serveur
     guild = discord.Object(id=GUILD_ID)
-    await bot.tree.sync(guild=guild)
 
-    check_gofast.start()
+    try:
+        await bot.tree.sync(guild=guild)
+        print(f"✅ Commandes synchronisées sur le serveur {GUILD_ID}")
+    except Exception as e:
+        print(f"❌ Erreur sync commandes : {e}")
+
+    if not check_gofast.is_running():
+        check_gofast.start()
+
     print(f"✅ Connecté en tant que {bot.user}")
 
 bot.run(TOKEN)
